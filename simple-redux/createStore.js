@@ -1,15 +1,34 @@
 // 生成默认的state和监听函数数组
 // 返回dispatch、subscribe等函数
 function createStore(reducer, preloadedState, enhancer) {
-    if(enhancer){  // 这个我们后面会解释，可以先忽略
+    // 当传入applyMiddleware方法的时候，preloadedState就是一个函数：createStore(reducer,applyMiddleware(createThunkMiddleware))
+    // applyMiddleware(createThunkMiddleware)返回的是一个函数，同时enhancer是undefined
+    // 此时，把函数赋值给enhancer，preloadedState设为{}
+    // 因此applyMiddleware返回的函数会赋值给enhancer
+    if (!enhancer && typeof preloadedState === "function") {
+        enhancer = preloadedState
+        preloadedState={}
+    }
+    // 如果发现有enhancer，就说明应用了中间件
+    // enhancer方法需要接收一个参数：createStore方法
+    // 直接执行enhancer方法，获取它返回的方法。其实这个返回的方法就是createStore方法
+    // 然后再传入reducer, preloadedState，调用这个返回的方法。此时就和正常调用createStore方法一样了
+    // 因此需要看一下applyMiddleware方法执行后返回的函数是怎么样的
+    if(enhancer && typeof enhancer === "function"){
+        // enhancer(createStore)(reducer, preloadedState)
+        // 这个函数最终执行完，会返回一个store对象，只不过里面的dispatch已经不是默认的dispatch方法了
+        // 它被改造过了
         return enhancer(createStore)(reducer, preloadedState)
     } 
+
+
     
     let currentReducer = reducer // 当前store中的reducer
     let currentState = preloadedState // 当前store中存储的状态
     let currentListeners = [] // 当前store中放置的监听函数
     let nextListeners = currentListeners // 下一次dispatch时的监听函数
     // 注意：当我们新添加一个监听函数时，只会在下一次dispatch的时候生效。
+    let isDispatch = false;
     
     // 获取state
     function getState() {
@@ -23,8 +42,13 @@ function createStore(reducer, preloadedState, enhancer) {
     // reducer就是一个纯函数，根据传入的action和当前store中的值，返回一个新数据
 
     function dispatch(action) {
+        if (isDispatch) return action
+        // dispatch必须一个个来
+        isDispatch = true
+
         // 调用reducer，得到新state
         currentState = currentReducer(currentState, action);
+        isDispatch = false
         // 非常简单，更新数据的功能已经完成了
 
         // 下面是执行监听函数

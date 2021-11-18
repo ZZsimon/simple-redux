@@ -33,7 +33,7 @@ store.dispatch({ type: 'counter/incremented' })
 ```
 ## redux各个方法实现
 
-#### createStore、subscribe、dispatch、getState
+#### 1. createStore、subscribe、dispatch、getState
 ```js
 // 生成默认的state和监听函数数组
 // 返回dispatch、subscribe等函数
@@ -123,7 +123,7 @@ function createStore(reducer, preloadedState, enhancer) {
 export default createStore
 
 ```
-#### combineReducers
+#### 2. combineReducers
 ```js
 /**
     循环执行每一个reducer
@@ -173,6 +173,101 @@ function combineReducers(reducers) {
 
 
 export default combineReducers
+```
 
+#### 3. applyMiddleware
+默认redux更新数据只能简单的同步更新数据，然而网页中用户点击按钮，很有可能需要调用接口，异步获取数据。那么redux默认的dispatch就无法做到了。
+因为默认的dispatch只会简单的执行reducer，更改数据的逻辑放在reducer中，然而reducer要求是一个纯函数。只能根据传入的数据做计算，不能获取其他数据。
+
+
+
+    那么中间件就是这个问题的解决方案。
+    applyMiddleware方法可以让使用redux的人方便的添加中间件
+    中间件会在发出action后，但是真正执行reducer之前，执行一些我们需要的操作。其实就是修改默认的dispatch。
+    例如输出日志，这样可以确保记录的是该动作的日志，又不会影响这个action本身的逻辑
+
+    那么如何在外部修改默认的dispatch方法呢，需要看一下createStore和applyMiddleware的源码。
+
+先看下createStore的源码，由于传入applyMiddleware函数：createStore(reducer,applyMiddleware(中间件1，中间件2) )，导致createStore函数提前return。
+```js
+// 当传入applyMiddleware方法的时候，preloadedState就是一个函数：createStore(reducer,applyMiddleware(createThunkMiddleware))
+// applyMiddleware(createThunkMiddleware)返回的是一个函数，同时enhancer是undefined
+// 此时，把函数赋值给enhancer，preloadedState设为{}
+// 因此applyMiddleware返回的函数会赋值给enhancer
+if (!enhancer && typeof preloadedState === "function") {
+    enhancer = preloadedState
+    preloadedState={}
+}
+// 如果发现有enhancer，就说明应用了中间件
+// enhancer方法需要接收一个参数：createStore方法
+// 直接执行enhancer方法，获取它返回的方法。其实这个返回的方法就是createStore方法
+// 然后再传入reducer, preloadedState，调用这个返回的方法。此时就和正常调用createStore方法一样了
+// 因此需要看一下applyMiddleware方法执行后返回的函数是怎么样的
+if(enhancer && typeof enhancer === "function"){
+    // enhancer(createStore)(reducer, preloadedState)
+    // 这个函数最终执行完，会返回一个store对象，只不过里面的dispatch已经不是默认的dispatch方法了
+    // 它被改造过了
+    return enhancer(createStore)(reducer, preloadedState)
+} 
+```
+
+再看下applyMiddleware的源码，看最终返回的是一个什么样的函数
+
+```js
+import compose from './compose.js'
+
+/**
+ * 
+ * @param  {...any} middlewares 中间件函数数组 输入参数是dispatch函数，输出也是dispatch函数
+ * @returns 
+ */
+function applyMiddleware(...middlewares) {
+    
+    // 当调用createStore函数的时候传入了applyMiddleware参数，即 createStore(reducer,applyMiddleware(createThunkMiddleware()))
+    // 那么最后返回的结果取决于  enhancer(createStore)(reducer, preloadedState) 的返回结果 ，位置在createStore函数源码中
+    // applyMiddleware返回的函数相当于enhancer函数，它固定接收createStore函数作为参数
+    // 这个enhancer函数执行完毕后，又返回了一个新函数
+    // 这个新函数会接受reducer, preloadedState等参数并调用
+    // 因此需要看一下调用新函数做了哪些事情
+    //      1.调用createStore方法，就和正常调用一样
+    //      2.返回一个store对象，这个对象的dispatch参数已经是改造后的函数啦
+    return createStore => {
+
+        return (...args) => {
+            
+            //用参数传进来的createStore创建一个store
+            const store  = createStore(...args)
+            //注意，我们在这里需要改造的只是store的dispatch方法
+            
+            // 定义了一个临时的dispatch，后面会被覆盖
+            let dispatch = () => { 
+                throw new Error(`一些错误信息`)
+            } 
+            //接下来我们准备将每个中间件与我们的state关联起来（通过传入getState方法），得到改造函数。
+            const middlewareAPI = {
+                getState: store.getState,
+                dispatch: (...args) => dispatch(...args)
+            }
+            // middleware就是function({ dispatch }) { ... }
+            // 执行后返回的函数是 function(next) { ... } 接受一个action
+            // 也就是说 chain中所有的函数都是 中间件函数创建的「改造函数」
+            // 「改造函数」要求输入一个dispatch参数，返回一个拥有中间件逻辑的dispatch函数
+            const chain = middlewares.map(middleware => middleware(middlewareAPI))
+            
+            // compose本质上就是不断的改造前面传递过来的dispatch函数
+            // 最终返回一个被全部改造完毕的dispatch函数
+            dispatch = compose(...chain)(store.dispatch)
+            
+            // 返回store，用改造后的dispatch方法替换store中的dispatch
+            return {
+                ...store,
+                dispatch
+            }
+        }
+    }
+}
+
+export default applyMiddleware
 
 ```
+
